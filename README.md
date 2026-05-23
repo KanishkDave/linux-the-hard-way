@@ -73,6 +73,10 @@ Not for you if:
 - Basic command line comfort
 - Willingness to break things on purpose
 
+  **WSL2 note:** Most scenarios work on WSL2. 
+For Scenarios 02 and 05 (OOM Kill + Thrashing) 
+a proper VM gives more accurate kernel behaviour.
+
 Full setup → [setup/README.md](setup/README.md)
 
 ---
@@ -138,7 +142,7 @@ nobody is paging you.
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/linux-the-hard-way.git
+git clone https://github.com/KanishkDave/linux-the-hard-way.git
 cd linux-the-hard-way
 
 # Set up tools
@@ -174,7 +178,7 @@ actually gets built.
 ## Roadmap
 
 Memory      ████████████  Complete
-CPU         ░░░░░░░░░░░░  In progress
+CPU         ░░░░░░░░░░░░  Coming soon
 IO          ░░░░░░░░░░░░  Coming soon
 Network     ░░░░░░░░░░░░  Coming soon
 Internals   ░░░░░░░░░░░░  Coming soon
@@ -204,8 +208,9 @@ to hear about it.
 
 ---
 
-*Built by an SRE who spent too long learning things the hard 
-way and decided to make the hard way optional.*
+**Built by a Senior SRE with 6 years of production experience
+— who got tired of learning things the hard way and decided
+to make the hard way optional.**
 
 ---
 
