@@ -179,7 +179,7 @@ actually gets built.
 
 ```
 Memory      ████████████  Complete
-CPU         ░░░░░░░░░░░░  In progress
+CPU         ░░░░░░░░░░░░  Coming soon
 IO          ░░░░░░░░░░░░  Coming soon
 Network     ░░░░░░░░░░░░  Coming soon
 Internals   ░░░░░░░░░░░░  Coming soon
