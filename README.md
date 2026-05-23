@@ -177,11 +177,13 @@ actually gets built.
 
 ## Roadmap
 
+```
 Memory      ████████████  Complete
-CPU         ░░░░░░░░░░░░  Coming soon
+CPU         ░░░░░░░░░░░░  In progress
 IO          ░░░░░░░░░░░░  Coming soon
 Network     ░░░░░░░░░░░░  Coming soon
 Internals   ░░░░░░░░░░░░  Coming soon
+```
 
 Star the repo to get notified as tracks get added.
 
