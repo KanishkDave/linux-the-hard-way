@@ -73,12 +73,6 @@ Not for you if:
 - Basic command line comfort
 - Willingness to break things on purpose
 
-  **WSL2 note:** Most scenarios work on WSL2. 
-For Scenarios 02 and 05 (OOM Kill + Thrashing) 
-a proper VM gives more accurate kernel behaviour.
-
-Full setup → [setup/README.md](setup/README.md)
-
 ---
 
 ## The Labs
@@ -109,22 +103,16 @@ By the end you'll never panic about buff/cache again.
 *Coming soon — load average, context switching, CPU steal, 
 runqueue analysis, flame graphs.*
 
-[Preview CPU Track →](cpu/README.md)
-
 ---
 
 ### 💾 IO & Storage
 *Coming soon — iostat, iowait, disk latency, IO saturation.*
-
-[Preview IO Track →](io/README.md)
 
 ---
 
 ### 🌐 Network
 *Coming soon — TCP states, packet drops, conntrack, 
 DNS failures.*
-
-[Preview Network Track →](network/README.md)
 
 ---
 
@@ -178,7 +166,7 @@ actually gets built.
 ## Roadmap
 
 ```
-Memory      ████████████  Complete
+Memory      ████████████  In progress
 CPU         ░░░░░░░░░░░░  Coming soon
 IO          ░░░░░░░░░░░░  Coming soon
 Network     ░░░░░░░░░░░░  Coming soon
@@ -206,11 +194,11 @@ understanding something that was fuzzy, or just feeling more
 confident about that on-call rotation — I'd genuinely like 
 to hear about it.
 
-[LinkedIn](your-linkedin-url) | [YouTube](your-youtube-url)
+[LinkedIn](https://www.linkedin.com/in/kanishkdave)
 
 ---
 
-**Built by a Senior SRE with 6 years of production experience
+**An SRE with years of fixing things in production
 — who got tired of learning things the hard way and decided
 to make the hard way optional.**
 
