@@ -6,11 +6,11 @@
 # This script triggers an OOM kill in two phases.
 # Open two more terminals before running and keep these ready:
 #
-#   vmstat 1
-#   sudo dmesg -Tw
+#   Terminal 2: vmstat 1
+#   Terminal 3: sudo dmesg -Tw
 #
 # Phase 1 — pressure with swap enabled (shows the buffer)
-# Phase 2 — swap disabled, OOM kill triggered
+# Phase 2 — swap disabled, OOM kill guaranteed
 #
 # Don't skip ahead. Observe each phase before continuing.
 # =============================================================
@@ -39,7 +39,6 @@ pause() {
 # ----- state --------------------------------------------------
 PIDS=()
 SWAP_WAS_ENABLED=0
-SWAP_DEVICES=()
 
 # ----- cleanup on exit ----------------------------------------
 cleanup() {
@@ -51,22 +50,21 @@ cleanup() {
         for pid in "${PIDS[@]}"; do
             kill "$pid" 2>/dev/null || true
         done
-        success "All workers stopped."
     fi
-
-    # Kill any stray stress-ng processes
     pkill -f stress-ng 2>/dev/null || true
+    success "All workers stopped."
 
     # Re-enable swap if we disabled it
     if [ "$SWAP_WAS_ENABLED" -eq 1 ]; then
         info "Re-enabling swap..."
         sudo swapon -a 2>/dev/null || true
+        sleep 2
         CURRENT_SWAP=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
         if [ "$CURRENT_SWAP" -gt 0 ]; then
-            success "Swap restored. Watch RAM recover: watch -n1 free -h"
+            success "Swap restored."
         else
-            warn "Swap may not have re-enabled automatically."
-            warn "Run manually: sudo swapon -a"
+            warn "Swap did not restore automatically."
+            warn "If swap is missing after exit, restart WSL: run 'wsl --shutdown' from Windows PowerShell."
         fi
     fi
 }
@@ -86,8 +84,8 @@ success "stress-ng found: $(stress-ng --version 2>&1 | head -1)"
 
 # Check sudo access — needed for swapoff/swapon
 if ! sudo -n true 2>/dev/null; then
-    warn "This script needs sudo access to disable/re-enable swap."
-    echo "  You'll be prompted for your password when swap is disabled in Phase 2."
+    info "This script needs sudo to disable/re-enable swap."
+    info "You will be prompted once when Phase 2 starts."
 fi
 
 # ----- system profile -----------------------------------------
@@ -98,29 +96,41 @@ CORES=$(nproc)
 
 if [ "$SWAP_KB" -gt 0 ]; then
     SWAP_WAS_ENABLED=1
-    success "Swap detected: $(awk "BEGIN {printf \"%.1f\", $SWAP_KB/1024/1024}")Gi — will be restored on exit"
+    SWAP_GB=$(awk "BEGIN {printf \"%.1f\", $SWAP_KB/1024/1024}")
+    success "Swap detected: ${SWAP_GB}Gi — will be restored on exit"
 else
-    warn "No swap detected. Phase 2 will still trigger OOM but Phase 1 may be less interesting."
+    warn "No swap detected. Phase 1 will behave similarly to Phase 2."
+    warn "OOM kill may trigger in Phase 1 as well."
 fi
 
 # ----- dynamic worker calculation -----------------------------
-# Phase 1: 4 workers at 90% RAM total — fills RAM, forces swap use
-# Phase 2: 4 workers at 95% RAM total — with swap gone, OOM is guaranteed
 #
-# Worker count scales to machine size so the same pressure thresholds
-# are hit regardless of how much RAM you have.
+# Phase 1 — With swap ON
+#   Goal: fill ~90% of RAM to force swap usage
+#   4 workers × 22% each ≈ 90% total
+#   --vm-populate forces immediate page touching (no lazy allocation)
+#
+# Phase 2 — Swap OFF
+#   Goal: demand MORE than available RAM to guarantee OOM
+#   --vm-bytes 120% means EACH worker demands 120% of available RAM
+#   4 workers × 120% = system collapses, OOM fires immediately
+#
+#   Note: stress-ng --vm-bytes percentage is per worker, calculated
+#   against available RAM at launch time — not total RAM divided across
+#   workers. Setting 120% per worker guarantees each one individually
+#   exceeds available RAM. OOM is mathematically certain with no swap.
 
-PHASE1_WORKERS=4
-PHASE2_WORKERS=4
+NUM_WORKERS=4
 
-# Calculate per-worker memory for Phase 1 (90% total across 4 workers)
-PHASE1_MEM_PCT=$(awk "BEGIN {printf \"%.0f\", 90 / $PHASE1_WORKERS}")
-# Phase 2: 95% total across 4 workers
-PHASE2_MEM_PCT=$(awk "BEGIN {printf \"%.0f\", 95 / $PHASE2_WORKERS}")
+PHASE1_PCT=$(awk "BEGIN {printf \"%.0f\", 90 / $NUM_WORKERS}")
+PHASE2_PCT=120
 
-info "System: ${TOTAL_RAM_GB}Gi RAM | ${CORES} CPU cores | Swap: $(awk "BEGIN {printf \"%.1f\", $SWAP_KB/1024/1024}")Gi"
-info "Phase 1: ${PHASE1_WORKERS} workers × ${PHASE1_MEM_PCT}% RAM each (90% total) — with swap"
-info "Phase 2: ${PHASE2_WORKERS} workers × ${PHASE2_MEM_PCT}% RAM each (95% total) — swap disabled"
+PHASE1_TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $TOTAL_RAM_KB/1024/1024 * 0.90}")
+PHASE2_TOTAL_GB=$(awk "BEGIN {printf \"%.1f\", $TOTAL_RAM_KB/1024/1024 * 1.20 * $NUM_WORKERS}")
+
+info "System: ${TOTAL_RAM_GB}Gi RAM | ${CORES} cores | Swap: ${SWAP_GB:-0}Gi"
+info "Phase 1: ${NUM_WORKERS} workers × ${PHASE1_PCT}% RAM each = ~${PHASE1_TOTAL_GB}Gi total (with swap)"
+info "Phase 2: ${NUM_WORKERS} workers × ${PHASE2_PCT}% available RAM each — OOM guaranteed (no swap)"
 echo ""
 
 # =============================================================
@@ -144,26 +154,28 @@ pause
 # =============================================================
 # PHASE 1 — Pressure with swap enabled
 # =============================================================
-section "Phase 1 — ${PHASE1_WORKERS} workers, ~90% RAM, swap enabled"
+section "Phase 1 — ${NUM_WORKERS} workers × ${PHASE1_PCT}% RAM, swap enabled"
 
-echo -e "Starting ${PHASE1_WORKERS} workers, each consuming ~${CYAN}${PHASE1_MEM_PCT}% of ${TOTAL_RAM_GB}Gi${RESET}."
+echo -e "Starting ${NUM_WORKERS} workers, demanding ~${CYAN}${PHASE1_TOTAL_GB}Gi${RESET} total (90% of RAM)."
+echo "--vm-populate forces workers to touch every page immediately."
 echo "Swap is still on. Watch what the kernel does when RAM fills up."
 echo ""
 
-stress-ng --vm "$PHASE1_WORKERS" --vm-bytes "${PHASE1_MEM_PCT}%" --vm-keep --timeout 300s &
+stress-ng --vm "$NUM_WORKERS" --vm-bytes "${PHASE1_PCT}%" \
+    --vm-keep --vm-populate --timeout 300s &
 PIDS+=($!)
 
-sleep 8
+sleep 10
 
 info "Workers running."
 echo ""
 echo -e "  ${BOLD}What to look for:${RESET}"
-echo "  free -h          → how low has 'available' dropped?"
-echo "  vmstat 1         → is 'so' non-zero? what about 'bi'/'bo'?"
-echo "  dmesg -Tw        → any drop_caches events?"
+echo "  free -h      → how low has 'available' dropped?"
+echo "  vmstat 1     → is 'so' non-zero? what about 'bi'/'bo'?"
+echo "  dmesg -Tw    → any drop_caches events?"
 echo ""
 echo -e "  ${BOLD}Key question:${RESET}"
-echo "  The system is under pressure but nothing has died."
+echo "  RAM is filling up but nothing has died."
 echo "  What is the kernel doing to keep things alive?"
 echo ""
 
@@ -173,118 +185,131 @@ echo "vmstat snapshot (5 readings):"
 vmstat 1 5
 echo ""
 
-# Show OOM scores for stress-ng workers
-echo "OOM scores for stress-ng workers:"
-for pid in $(pgrep stress-ng-vm 2>/dev/null | head -4); do
+# Show OOM scores
+echo "OOM scores for running workers:"
+for pid in $(pgrep -x stress-ng-vm 2>/dev/null | head -4); do
     score=$(cat /proc/$pid/oom_score 2>/dev/null || echo "N/A")
     adj=$(cat /proc/$pid/oom_score_adj 2>/dev/null || echo "N/A")
-    echo "  PID $pid — oom_score: $score | oom_score_adj: $adj"
+    rss=$(awk '/VmRSS/{print $2}' /proc/$pid/status 2>/dev/null || echo "N/A")
+    rss_mb=$(awk "BEGIN {printf \"%.0f\", ${rss:-0}/1024}")
+    echo "  PID $pid — oom_score: $score | oom_score_adj: $adj | RSS: ${rss_mb}MB"
 done
 echo ""
-info "oom_score_adj: 1000 means stress-ng is intentionally the first OOM target."
+info "Note the OOM score — this tells you kill priority before anything dies."
 
 pause
 
-# Kill Phase 1 workers before Phase 2
-info "Stopping Phase 1 workers..."
+# Kill Phase 1 workers cleanly before Phase 2
+info "Stopping Phase 1 workers before removing swap..."
 for pid in "${PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
 done
 pkill -f stress-ng 2>/dev/null || true
 PIDS=()
 sleep 5
-success "Phase 1 workers stopped. RAM recovering."
-echo ""
+success "Phase 1 workers stopped. Waiting for RAM to recover..."
+sleep 5
 free -h
 
 pause
 
 # =============================================================
-# PHASE 2 — Swap disabled, OOM kill
+# PHASE 2 — Swap disabled, OOM guaranteed
 # =============================================================
 section "Phase 2 — Removing the safety net"
 
 echo "Disabling swap. From this point there is no buffer."
-echo "When RAM runs out, the OOM killer fires immediately."
+echo "Each worker will demand ${PHASE2_PCT}% of available RAM individually."
+echo "The kernel will have no choice but to kill something."
 echo ""
 
 if [ "$SWAP_WAS_ENABLED" -eq 1 ]; then
     sudo swapoff -a
+    sleep 2
     CURRENT_SWAP=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
     if [ "$CURRENT_SWAP" -eq 0 ]; then
         success "Swap disabled."
     else
-        warn "swapoff may not have completed. Check: free -h"
+        warn "swapoff may not have completed fully. Continuing anyway."
     fi
-else
-    warn "No swap was enabled — Phase 2 will behave the same as Phase 1 already did."
 fi
 
 echo ""
 free -h
 echo ""
-echo -e "  ${BOLD}Notice:${RESET} Swap line now shows 0. No safety net."
-echo ""
-echo "Launching ${PHASE2_WORKERS} workers at ${PHASE2_MEM_PCT}% RAM each."
-echo -e "  ${RED}Watch Terminal 3 (dmesg) closely. The OOM kill message will appear there.${RESET}"
+echo -e "  ${BOLD}Notice:${RESET} Swap shows 0. No safety net."
 echo ""
 
 pause
 
-stress-ng --vm "$PHASE2_WORKERS" --vm-bytes "${PHASE2_MEM_PCT}%" --vm-keep --timeout 120s &
+section "Phase 2 — ${NUM_WORKERS} workers × ${PHASE2_PCT}% available RAM each, no swap"
+
+echo -e "Launching ${NUM_WORKERS} workers, each demanding ${CYAN}${PHASE2_PCT}%${RESET} of available RAM."
+echo "Each worker alone exceeds available RAM. With 4 workers and no swap — OOM is certain."
+echo -e "  ${RED}Watch Terminal 3 (dmesg) closely. The OOM message will appear there.${RESET}"
+echo ""
+
+stress-ng --vm "$NUM_WORKERS" --vm-bytes "${PHASE2_PCT}%" \
+    --vm-keep --vm-populate --timeout 180s &
 PIDS+=($!)
 
-sleep 5
-
-info "Workers running. RAM will exhaust within seconds to minutes."
+info "Workers launched. RAM will collapse within seconds to minutes."
 echo ""
-echo -e "  ${BOLD}What to look for:${RESET}"
-echo "  dmesg -Tw        → OOM kill message — who invoked it? who died?"
-echo "  vmstat 1         → bi/bo spiking (thrashing) before the kill"
-echo "  free -h          → available collapsing toward zero"
-echo "  ps aux | grep stress-ng  → did all 4 workers survive?"
+echo -e "  ${BOLD}Watch your terminals now:${RESET}"
+echo "  Terminal 2 (vmstat)  → bi/bo spiking, r column backing up"
+echo "  Terminal 3 (dmesg)   → OOM kill message will appear there"
+echo "  free -h              → available dropping toward zero"
 echo ""
-echo -e "  ${BOLD}Key questions:${RESET}"
+echo -e "  ${BOLD}Key questions to think about:${RESET}"
 echo "  Which process invoked the OOM killer?"
 echo "  Is that the same process that got killed?"
-echo "  Why did stress-ng get killed instead of systemd?"
-echo ""
+echo "  Why did stress-ng get killed instead of systemd or containerd?"
 
-# Wait for OOM or timeout
-sleep 30
+pause
 
+# ----- Step: show OOM log snippet -----------------------------
+section "What dmesg captured"
+
+echo "Recent OOM events from dmesg:"
 echo ""
-echo "Current state:"
-free -h
+sudo dmesg 2>/dev/null | grep -i "oom\|killed process\|out of memory\|all_unreclaimable" | tail -15 \
+    || echo "  (none yet — OOM may still be in progress, check Terminal 3)"
 echo ""
 echo "Surviving stress-ng workers:"
-ps aux | grep stress-ng | grep -v grep || echo "  (none — all killed)"
-echo ""
-echo "Recent OOM events in dmesg:"
-sudo dmesg | grep -i "oom\|killed process" | tail -10 || echo "  (none yet — may still be building)"
+ps aux | grep stress-ng | grep -v grep || echo "  (all killed — OOM fired successfully)"
 
-# =============================================================
-# SUMMARY
-# =============================================================
+pause
+
+# ----- Step: scenario complete --------------------------------
 section "Scenario complete"
 
 echo -e "  ${BOLD}What you just observed:${RESET}"
 echo ""
-echo "  1. Swap as buffer    — Phase 1 survived because swap absorbed the overflow"
-echo "  2. No-swap = no warning — Phase 2 OOM fired with no degradation window"
-echo "  3. Trigger ≠ culprit — the invoking process needed the last page, not the most"
-echo "  4. OOM score matters — oom_score_adj: 1000 made stress-ng the intentional target"
-echo "  5. bi/bo thrashing   — kernel doing heavy IO trying to reclaim before killing"
+echo "  1. Swap as buffer       — Phase 1 survived because swap absorbed overflow"
+echo "  2. No swap = no warning — Phase 2 OOM fired with no degradation window"
+echo "  3. Trigger ≠ culprit    — the invoking process just needed the last page"
+echo "  4. OOM score decides    — highest scorer dies, not biggest consumer"
+echo "  5. bi/bo thrashing      — kernel doing heavy IO trying to reclaim before killing"
 echo ""
 echo -e "  ${BOLD}Commands that told the story:${RESET}"
-echo "  sudo dmesg -Tw               → OOM kill event, invoker, victim, memory state"
-echo "  cat /proc/<pid>/oom_score    → current kill priority of any process"
+echo "  sudo dmesg                    → OOM event, invoker, victim, memory state at kill"
+echo "  cat /proc/<pid>/oom_score     → kill priority of any process"
 echo "  cat /proc/<pid>/oom_score_adj → manual bias applied"
-echo "  vmstat 1 bi/bo               → IO thrashing signal before OOM fires"
-echo "  free -h available            → the number that tells you how close you are"
+echo "  vmstat 1 bi/bo                → IO thrashing signal before OOM fires"
+echo "  free -h available             → how close you are to the edge"
 echo ""
-echo -e "  ${CYAN}Next → Scenario 03: Memory Leak${RESET}"
-echo "  ../scenario-03-memory-leak/README.md"
+echo -e "  ${BOLD}For detailed explanation of every output, what each number means,"
+echo -e "  and the full chain of events — read the README:${RESET}"
+echo "  ./README.md"
 echo ""
 
-info "Cleaning up workers and restoring swap..."
+pause
+
+info "Restoring swap and cleaning up workers..."
+
+# wait for cleanup trap to complete then print next scenario
+wait 2>/dev/null || true
+echo ""
+echo -e "${CYAN}Next → Scenario 03: Memory Leak${RESET}"
+echo "  ../scenario-03-memory-leak/README.md"
+echo ""

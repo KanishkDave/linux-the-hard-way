@@ -298,7 +298,7 @@ Phase 1 — With swap enabled
 
 Phase 2 — Swap disabled
   └── sudo swapoff -a — safety net removed
-  └── 4 workers re-launched at 95% of RAM
+  └── 4 workers re-launched at 120% of RAM each — OOM mathematically guaranteed
   └── Available collapsed toward zero
   └── Kernel reclaimed page cache aggressively
   └── inactive_file dropped to 0 — nothing left to reclaim

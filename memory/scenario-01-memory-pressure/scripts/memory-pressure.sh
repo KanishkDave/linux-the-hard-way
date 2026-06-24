@@ -6,7 +6,6 @@
 # This script triggers memory pressure in three phases.
 # Open a second terminal before running and keep these ready:
 #
-#   watch -n1 free -h
 #   vmstat 1
 #   smem -r | head -20
 #
@@ -30,7 +29,7 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 section() { echo -e "\n${BOLD}$*${RESET}"; echo "$(printf '%.0s─' {1..60})"; }
 pause() {
     echo ""
-    echo -e "${YELLOW}Press ENTER to continue to the next phase...${RESET}"
+    echo -e "${YELLOW}Press ENTER to continue...${RESET}"
     read -r
 }
 
@@ -80,18 +79,12 @@ CORES=$(nproc)
 # We calculate how many workers are needed per phase to hit
 # the same pressure thresholds on any machine size:
 #
-#   Phase 1 — noticeable allocation, swap untouched (~1 worker's worth of RAM)
+#   Phase 1 — noticeable allocation, swap untouched
 #   Phase 2 — overcommit territory (Committed_AS > CommitLimit)
 #   Phase 3 — tip into swap (available RAM near zero)
-#
-# On a 4GB machine this might be 1+1+1.
-# On a 32GB machine this might be 3+3+2.
-# The experience — gradual pressure, overcommit, swap — is the same.
 
-# One worker uses 60% of total RAM
 WORKER_RAM_KB=$(awk "BEGIN {printf \"%d\", $TOTAL_RAM_KB * 0.6}")
 
-# Phase 1: fill roughly 60% of RAM — calm, no swap
 PHASE1_WORKERS=$(awk "BEGIN {
     w = int($TOTAL_RAM_KB * 0.60 / $WORKER_RAM_KB)
     if (w < 1) w = 1
@@ -99,7 +92,6 @@ PHASE1_WORKERS=$(awk "BEGIN {
     print w
 }")
 
-# Phase 2: fill ~80% — overcommit territory
 PHASE2_WORKERS=$(awk "BEGIN {
     total_needed = int($TOTAL_RAM_KB * 0.80 / $WORKER_RAM_KB)
     phase2 = total_needed - $PHASE1_WORKERS
@@ -108,8 +100,6 @@ PHASE2_WORKERS=$(awk "BEGIN {
     print phase2
 }")
 
-# Phase 3: push past available RAM into swap
-# On machines with no swap, keep at 1 — OOM may trigger, that's okay
 PHASE3_WORKERS=$(awk "BEGIN {
     if ($SWAP_KB == 0) { print 1 } else { print 2 }
 }")
@@ -152,20 +142,32 @@ PIDS+=($!)
 
 sleep 5
 
-info "Workers running. Observe your second terminal."
+info "Workers running. Switch to your vmstat terminal and watch."
 echo ""
 echo -e "  ${BOLD}What to look for:${RESET}"
 echo "  free -h      → how much has 'available' dropped?"
 echo "  vmstat 1     → is si/so still zero? what is r showing?"
 echo "  ps aux --sort=-%mem | head -10  → spot the VSZ vs RSS gap"
 echo ""
-echo "  Question: why does ps show >100% CPU per worker"
+echo -e "  ${BOLD}Key question:${RESET}"
+echo "  Why does ps show >100% CPU per worker"
 echo "  but vmstat shows the system mostly idle?"
-echo ""
 
+pause
+
+# ----- Phase 1 output snapshot --------------------------------
+section "Phase 1 — what the system is showing you"
+
+echo "Memory state:"
 free -h
 echo ""
 grep -E 'CommitLimit|Committed_AS' /proc/meminfo
+echo ""
+echo "Top memory consumers:"
+ps aux --sort=-%mem | head -10
+echo ""
+echo "vmstat snapshot (5 readings):"
+vmstat 1 5
 
 pause
 
@@ -190,9 +192,14 @@ echo "  CommitLimit vs Committed_AS  → how far into overcommit?"
 echo "  available in free -h         → getting tight?"
 echo "  si/so in vmstat              → swap still untouched?"
 echo ""
-echo "  Question: why hasn't swap kicked in yet,"
+echo -e "  ${BOLD}Key question:${RESET}"
+echo "  Why hasn't swap kicked in yet,"
 echo "  even though Committed_AS exceeds CommitLimit?"
-echo ""
+
+pause
+
+# ----- Phase 2 output snapshot --------------------------------
+section "Phase 2 — what the system is showing you"
 
 free -h
 echo ""
@@ -207,6 +214,9 @@ OVERLIMIT=$(awk '/CommitLimit/ {limit=$2} /Committed_AS/ {committed=$2} \
             print "0"
     }' /proc/meminfo)
 info "Overcommit: ${OVERLIMIT}% over CommitLimit"
+echo ""
+echo "vmstat snapshot (5 readings):"
+vmstat 1 5
 
 pause
 
@@ -216,7 +226,6 @@ pause
 section "Phase 3 — ${PHASE3_WORKERS} final worker(s) (${TOTAL_WORKERS} total) — swap territory"
 
 echo "Adding ${PHASE3_WORKERS} more worker(s). Available RAM nearly exhausted."
-echo "Watch your vmstat window — this is where swap kicks in."
 echo ""
 
 stress-ng --vm "$PHASE3_WORKERS" --vm-bytes 60% --vm-keep --timeout 180s &
@@ -224,7 +233,7 @@ PIDS+=($!)
 
 sleep 3
 
-info "${TOTAL_WORKERS} workers now running. Watch for so (swap out) to spike in vmstat."
+info "${TOTAL_WORKERS} workers now running."
 echo ""
 echo -e "  ${BOLD}What to look for:${RESET}"
 echo "  vmstat 1     → so column spikes? sy jumps? r backed up?"
@@ -234,9 +243,11 @@ echo ""
 echo -e "  ${BOLD}Key question:${RESET}"
 echo "  When swap kicks in, which processes get evicted?"
 echo "  The memory hogs or the idle background processes?"
-echo ""
 
-sleep 10
+pause
+
+# ----- Phase 3 output snapshot --------------------------------
+section "Phase 3 — what the system is showing you"
 
 free -h
 echo ""
@@ -245,6 +256,8 @@ vmstat 1 5
 echo ""
 echo "Top swap consumers:"
 smem -r 2>/dev/null | head -15 || warn "Try: sudo smem -r"
+
+pause
 
 # =============================================================
 # SUMMARY
@@ -264,8 +277,18 @@ echo "  vmstat si/so         → non-zero swap out = RAM no longer sufficient"
 echo "  /proc/meminfo        → CommitLimit vs Committed_AS = overcommit picture"
 echo "  smem -r              → who actually got evicted"
 echo ""
-echo -e "  ${CYAN}Next → Scenario 02: OOM Kill${RESET}"
-echo "  ../scenario-02-oom-kill/README.md"
+echo -e "  ${BOLD}For detailed explanation of every output, what each number means,"
+echo -e "  and the full chain of events — read the README:${RESET}"
+echo "  ./README.md"
 echo ""
 
+pause
+
 info "Cleaning up workers now. Swap will drain automatically."
+
+# wait for cleanup trap to complete then print next scenario
+wait 2>/dev/null || true
+echo ""
+echo -e "${CYAN}Next → Scenario 02: OOM Kill${RESET}"
+echo "  ../scenario-02-oom-kill/README.md"
+echo ""
